@@ -23,6 +23,7 @@
  *
  * WiFi image streamer example
  */
+
 #include "pmsis.h"
 
 #include "bsp/bsp.h"
@@ -87,6 +88,9 @@ static int wifiConnected = 0;
 static int wifiClientConnected = 0;
 
 static CPXPacket_t rxp;
+static CPXPacket_t rxPacketState;
+static CPXPacket_t txPacketState;
+
 void rx_task(void *parameters)
 {
   while (1)
@@ -197,6 +201,28 @@ void setupWiFi(void) {
 }
 #endif
 
+void stm_bounce_task(void *parameters)
+{
+  cpxPrintToConsole(LOG_TO_CRTP, "Starting stm bouncer task...\n");
+  
+  while (1)
+  {
+    vTaskDelay(10);
+    // Testing the stm packet bounce
+    cpxReceivePacketBlocking(CPX_F_APP, &rxPacketState);
+    uint8_t counterInStm = rxPacketState.data[0];
+
+    cpxPrintToConsole(LOG_TO_CRTP, "Counter in STM: %d\n", counterInStm);
+
+    cpxInitRoute(CPX_T_GAP8, CPX_T_STM32, CPX_F_APP, &txPacketState.route);
+    txPacketState.data[0] = counterInStm;
+    txPacketState.dataLength = 1;
+
+    cpxSendPacketBlocking(&txPacketState);
+  }
+}
+
+
 void camera_task(void *parameters)
 {
   vTaskDelay(2000);
@@ -288,6 +314,7 @@ void camera_task(void *parameters)
         cpxSendPacketBlocking(&txp);
 
         start = xTaskGetTickCount();
+
         // First send header
         memcpy(txp.data, header.data, headerSize);
         txp.dataLength = headerSize;
@@ -367,8 +394,9 @@ void start_example(void)
 
   cpxInit();
   cpxEnableFunction(CPX_F_WIFI_CTRL);
+  cpxEnableFunction(CPX_F_APP);
 
-  cpxPrintToConsole(LOG_TO_CRTP, "-- WiFi image streamer example --\n");
+  cpxPrintToConsole(LOG_TO_CRTP, "-- WiFi image streamer with estimator state (v0.1) --\n");
 
   evGroup = xEventGroupCreate();
 
@@ -397,6 +425,15 @@ void start_example(void)
   if (xTask != pdPASS)
   {
     cpxPrintToConsole(LOG_TO_CRTP, "RX task did not start !\n");
+    pmsis_exit(-1);
+  }
+
+  xTask = xTaskCreate(stm_bounce_task, "stm_bounce_task", configMINIMAL_STACK_SIZE * 2,
+                      NULL, tskIDLE_PRIORITY + 1, NULL);
+
+  if (xTask != pdPASS)
+  {
+    cpxPrintToConsole(LOG_TO_CRTP, "stm bounce task did not start !\n");
     pmsis_exit(-1);
   }
 

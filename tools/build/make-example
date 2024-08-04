@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -e
+
+scriptDir=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
+
+make_args="${@: 2}"
+
+full_path=${scriptDir}/../../
+cd ${full_path}
+pwd
+
+export GAPY_OPENOCD_CABLE=interface/ftdi/olimex-arm-usb-tiny-h.cfg
+pip3 install numpy==1.22.3
+source /gap_sdk/configs/ai_deck.sh
+echo "make ${make_args}"
+make ${make_args}
