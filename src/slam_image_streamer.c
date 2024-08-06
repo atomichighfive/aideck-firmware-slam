@@ -89,7 +89,7 @@ static int wifiClientConnected = 0;
 
 static CPXPacket_t rxp;
 static CPXPacket_t rxPacketState;
-static CPXPacket_t txPacketState;
+static CPXPacket_t txPacketRequest;
 
 void rx_task(void *parameters)
 {
@@ -201,24 +201,34 @@ void setupWiFi(void) {
 }
 #endif
 
-void stm_bounce_task(void *parameters)
+void state_listener_task(void *parameters)
 {
-  cpxPrintToConsole(LOG_TO_CRTP, "Starting stm bouncer task...\n");
+  cpxPrintToConsole(LOG_TO_CRTP, "Starting gap8 state listener task...\n");
   
   while (1)
   {
     vTaskDelay(10);
     // Testing the stm packet bounce
     cpxReceivePacketBlocking(CPX_F_APP, &rxPacketState);
-    uint8_t counterInStm = rxPacketState.data[0];
 
-    cpxPrintToConsole(LOG_TO_CRTP, "Counter in STM: %d\n", counterInStm);
+    cpxPrintToConsole(LOG_TO_CRTP, "GAP8 received state (request_id: %u, length: %d)\n", rxPacketState.data[0], rxPacketState.dataLength);
+  }
+}
 
-    cpxInitRoute(CPX_T_GAP8, CPX_T_STM32, CPX_F_APP, &txPacketState.route);
-    txPacketState.data[0] = counterInStm;
-    txPacketState.dataLength = 1;
+void state_requester_task(void *parameters)
+{
+  cpxPrintToConsole(LOG_TO_CRTP, "Starting gap8 state requester task...\n");
+  uint8_t counter = 0;
 
-    cpxSendPacketBlocking(&txPacketState);
+  while (1)
+  {
+    vTaskDelay(2000);
+    cpxInitRoute(CPX_T_GAP8, CPX_T_STM32, CPX_F_APP, &txPacketRequest.route);
+    txPacketRequest.data[0] = counter;
+    txPacketRequest.dataLength = 1;
+    cpxSendPacketBlocking(&txPacketRequest);
+    //cpxPrintToConsole(LOG_TO_CRTP, "GAP8 requested state (counter: %u)\n", counter);
+    counter++;
   }
 }
 
@@ -428,12 +438,20 @@ void start_example(void)
     pmsis_exit(-1);
   }
 
-  xTask = xTaskCreate(stm_bounce_task, "stm_bounce_task", configMINIMAL_STACK_SIZE * 2,
+  xTask = xTaskCreate(state_listener_task, "state_listener_task", configMINIMAL_STACK_SIZE * 2,
                       NULL, tskIDLE_PRIORITY + 1, NULL);
 
   if (xTask != pdPASS)
   {
-    cpxPrintToConsole(LOG_TO_CRTP, "stm bounce task did not start !\n");
+    cpxPrintToConsole(LOG_TO_CRTP, "State listener task did not start !\n");
+    pmsis_exit(-1);
+  }
+
+  xTask = xTaskCreate(state_requester_task, "state_requester_task", configMINIMAL_STACK_SIZE * 2,
+                      NULL, tskIDLE_PRIORITY + 1, NULL);
+
+  if (xTask != pdPASS){
+    cpxPrintToConsole(LOG_TO_CRTP, "State requester task did not start !\n");
     pmsis_exit(-1);
   }
 
