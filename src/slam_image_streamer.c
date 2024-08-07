@@ -89,7 +89,7 @@ static int wifiClientConnected = 0;
 
 static CPXPacket_t rxp;
 static CPXPacket_t rxPacketState;
-static CPXPacket_t txPacketRequest;
+static CPXPacket_t txPacketRequestState;
 
 void rx_task(void *parameters)
 {
@@ -130,6 +130,26 @@ typedef struct
   uint8_t depth;
   uint8_t type;
   uint32_t size;
+  uint8_t request_id;
+  float attitude_roll;
+  float attitude_pitch;
+  float attitude_yaw;
+  float attitudeQuaternion_x;
+  float attitudeQuaternion_y;
+  float attitudeQuaternion_z;
+  float attitudeQuaternion_w;
+  uint32_t position_timestamp;
+  float position_x;
+  float position_y;
+  float position_z;
+  uint32_t velocity_timestamp;
+  float velocity_x;
+  float velocity_y;
+  float velocity_z;
+  uint32_t acceleration_timestamp;
+  float acceleration_x;
+  float acceleration_y;
+  float acceleration_z;
 } __attribute__((packed)) img_header_t;
 
 static jpeg_encoder_t jpeg_encoder;
@@ -151,7 +171,7 @@ static StreamerMode_t streamerMode = RAW_ENCODING;
 
 static CPXPacket_t txp;
 
-void createImageHeaderPacket(CPXPacket_t * packet, uint32_t imgSize, StreamerMode_t imgType) {
+void createImageHeaderPacket(CPXPacket_t * packet, uint32_t imgSize, StreamerMode_t imgType, CPXPacket_t * rxPacketState) {
   img_header_t *imgHeader = (img_header_t *) packet->data;
   imgHeader->magic = 0xBC;
   imgHeader->width = CAM_WIDTH;
@@ -159,6 +179,26 @@ void createImageHeaderPacket(CPXPacket_t * packet, uint32_t imgSize, StreamerMod
   imgHeader->depth = 1;
   imgHeader->type = imgType;
   imgHeader->size = imgSize;
+  imgHeader->request_id = *(uint8_t*)(rxPacketState->data);
+  imgHeader->attitude_roll = *(float*)(rxPacketState->data + sizeof(uint8_t));
+  imgHeader->attitude_pitch = *(float*)(rxPacketState->data + sizeof(uint8_t) + sizeof(float));
+  imgHeader->attitude_yaw = *(float*)(rxPacketState->data + sizeof(uint8_t) + 2 * sizeof(float));
+  imgHeader->attitudeQuaternion_x = *(float*)(rxPacketState->data + sizeof(uint8_t) + 3 * sizeof(float));
+  imgHeader->attitudeQuaternion_y = *(float*)(rxPacketState->data + sizeof(uint8_t) + 4 * sizeof(float));
+  imgHeader->attitudeQuaternion_z = *(float*)(rxPacketState->data + sizeof(uint8_t) + 5 * sizeof(float));
+  imgHeader->attitudeQuaternion_w = *(float*)(rxPacketState->data + sizeof(uint8_t) + 6 * sizeof(float));
+  imgHeader->position_timestamp = *(uint32_t*)(rxPacketState->data + sizeof(uint8_t) + 7 * sizeof(float));
+  imgHeader->position_x = *(float*)(rxPacketState->data + sizeof(uint8_t) + 7 * sizeof(float) + sizeof(uint32_t));
+  imgHeader->position_y = *(float*)(rxPacketState->data + sizeof(uint8_t) + 7 * sizeof(float) + sizeof(uint32_t) + sizeof(float));
+  imgHeader->position_z = *(float*)(rxPacketState->data + sizeof(uint8_t) + 7 * sizeof(float) + sizeof(uint32_t) + 2 * sizeof(float));
+  imgHeader->velocity_timestamp = *(uint32_t*)(rxPacketState->data + sizeof(uint8_t) + 7 * sizeof(float) + sizeof(uint32_t) + 3 * sizeof(float));
+  imgHeader->velocity_x = *(float*)(rxPacketState->data + sizeof(uint8_t) + 7 * sizeof(float) + sizeof(uint32_t) + 3 * sizeof(float) + sizeof(uint32_t));
+  imgHeader->velocity_y = *(float*)(rxPacketState->data + sizeof(uint8_t) + 7 * sizeof(float) + sizeof(uint32_t) + 3 * sizeof(float) + sizeof(uint32_t) + sizeof(float));
+  imgHeader->velocity_z = *(float*)(rxPacketState->data + sizeof(uint8_t) + 7 * sizeof(float) + sizeof(uint32_t) + 3 * sizeof(float) + sizeof(uint32_t) + 2 * sizeof(float));
+  imgHeader->acceleration_timestamp = *(uint32_t*)(rxPacketState->data + sizeof(uint8_t) + 7 * sizeof(float) + sizeof(uint32_t) + 3 * sizeof(float) + sizeof(uint32_t) + 3 * sizeof(float));
+  imgHeader->acceleration_x = *(float*)(rxPacketState->data + sizeof(uint8_t) + 7 * sizeof(float) + sizeof(uint32_t) + 3 * sizeof(float) + sizeof(uint32_t) + 3 * sizeof(float) + sizeof(uint32_t));
+  imgHeader->acceleration_y = *(float*)(rxPacketState->data + sizeof(uint8_t) + 7 * sizeof(float) + sizeof(uint32_t) + 3 * sizeof(float) + sizeof(uint32_t) + 3 * sizeof(float) + sizeof(uint32_t) + sizeof(float));
+  imgHeader->acceleration_z = *(float*)(rxPacketState->data + sizeof(uint8_t) + 7 * sizeof(float) + sizeof(uint32_t) + 3 * sizeof(float) + sizeof(uint32_t) + 3 * sizeof(float) + sizeof(uint32_t) + 2 * sizeof(float));
   packet->dataLength = sizeof(img_header_t);
 }
 
@@ -211,7 +251,54 @@ void state_listener_task(void *parameters)
     // Testing the stm packet bounce
     cpxReceivePacketBlocking(CPX_F_APP, &rxPacketState);
 
-    cpxPrintToConsole(LOG_TO_CRTP, "GAP8 received state (request_id: %u, length: %d)\n", rxPacketState.data[0], rxPacketState.dataLength);
+    // Format string for printing the values
+    char* formatString = "Request ID: %u\n"
+                         "Attitude Roll: %f\n"
+                         "Attitude Pitch: %f\n"
+                         "Attitude Yaw: %f\n"
+                         "Attitude Quaternion X: %f\n"
+                         "Attitude Quaternion Y: %f\n"
+                         "Attitude Quaternion Z: %f\n"
+                         "Attitude Quaternion W: %f\n"
+                         "Position Timestamp: %u\n"
+                         "Position X: %f\n"
+                         "Position Y: %f\n"
+                         "Position Z: %f\n"
+                         "Velocity Timestamp: %u\n"
+                         "Velocity X: %f\n"
+                         "Velocity Y: %f\n"
+                         "Velocity Z: %f\n"
+                         "Acceleration Timestamp: %u\n"
+                         "Acceleration X: %f\n"
+                         "Acceleration Y: %f\n"
+                         "Acceleration Z: %f\n";
+
+  // Print the values
+  cpxPrintToConsole(
+    LOG_TO_CRTP,
+    formatString,
+    *(uint8_t*)(rxPacketState.data),
+    *(float*)(rxPacketState.data + sizeof(uint8_t)),
+    *(float*)(rxPacketState.data + sizeof(uint8_t) + sizeof(float)),
+    *(float*)(rxPacketState.data + sizeof(uint8_t) + 2 * sizeof(float)),
+    *(float*)(rxPacketState.data + sizeof(uint8_t) + 3 * sizeof(float)),
+    *(float*)(rxPacketState.data + sizeof(uint8_t) + 4 * sizeof(float)),
+    *(float*)(rxPacketState.data + sizeof(uint8_t) + 5 * sizeof(float)),
+    *(float*)(rxPacketState.data + sizeof(uint8_t) + 6 * sizeof(float)),
+    *(uint32_t*)(rxPacketState.data + sizeof(uint8_t) + 7 * sizeof(float)),
+    *(float*)(rxPacketState.data + sizeof(uint8_t) + 7 * sizeof(float) + sizeof(uint32_t)),
+    *(float*)(rxPacketState.data + sizeof(uint8_t) + 7 * sizeof(float) + sizeof(uint32_t) + sizeof(float)),
+    *(float*)(rxPacketState.data + sizeof(uint8_t) + 7 * sizeof(float) + sizeof(uint32_t) + 2 * sizeof(float)),
+    *(uint32_t*)(rxPacketState.data + sizeof(uint8_t) + 7 * sizeof(float) + sizeof(uint32_t) + 3 * sizeof(float)),
+    *(float*)(rxPacketState.data + sizeof(uint8_t) + 7 * sizeof(float) + sizeof(uint32_t) + 3 * sizeof(float) + sizeof(uint32_t)),
+    *(float*)(rxPacketState.data + sizeof(uint8_t) + 7 * sizeof(float) + sizeof(uint32_t) + 3 * sizeof(float) + sizeof(uint32_t) + sizeof(float)),
+    *(float*)(rxPacketState.data + sizeof(uint8_t) + 7 * sizeof(float) + sizeof(uint32_t) + 3 * sizeof(float) + sizeof(uint32_t) + 2 * sizeof(float)),
+    *(uint32_t*)(rxPacketState.data + sizeof(uint8_t) + 7 * sizeof(float) + sizeof(uint32_t) + 3 * sizeof(float) + sizeof(uint32_t) + 3 * sizeof(float)),
+    *(float*)(rxPacketState.data + sizeof(uint8_t) + 7 * sizeof(float) + sizeof(uint32_t) + 3 * sizeof(float) + sizeof(uint32_t) + 3 * sizeof(float) + sizeof(uint32_t)),
+    *(float*)(rxPacketState.data + sizeof(uint8_t) + 7 * sizeof(float) + sizeof(uint32_t) + 3 * sizeof(float) + sizeof(uint32_t) + 3 * sizeof(float) + sizeof(uint32_t) + sizeof(float)),
+    *(float*)(rxPacketState.data + sizeof(uint8_t) + 7 * sizeof(float) + sizeof(uint32_t) + 3 * sizeof(float) + sizeof(uint32_t) + 3 * sizeof(float) + sizeof(uint32_t) + 2 * sizeof(float))
+  );
+
   }
 }
 
@@ -223,10 +310,10 @@ void state_requester_task(void *parameters)
   while (1)
   {
     vTaskDelay(2000);
-    cpxInitRoute(CPX_T_GAP8, CPX_T_STM32, CPX_F_APP, &txPacketRequest.route);
-    txPacketRequest.data[0] = counter;
-    txPacketRequest.dataLength = 1;
-    cpxSendPacketBlocking(&txPacketRequest);
+    cpxInitRoute(CPX_T_GAP8, CPX_T_STM32, CPX_F_APP, &txPacketRequestState.route);
+    txPacketRequestState.data[0] = counter;
+    txPacketRequestState.dataLength = 1;
+    cpxSendPacketBlocking(&txPacketRequestState);
     //cpxPrintToConsole(LOG_TO_CRTP, "GAP8 requested state (counter: %u)\n", counter);
     counter++;
   }
@@ -296,17 +383,34 @@ void camera_task(void *parameters)
   cpxInitRoute(CPX_T_GAP8, CPX_T_WIFI_HOST, CPX_F_APP, &txp.route);
 
   uint32_t imgSize = 0;
+  uint8_t stateRequestCounter = 0;
 
   while (1)
   {
     if (wifiClientConnected == 1)
     {
+
+      // Request the state from the stm
+      cpxInitRoute(CPX_T_GAP8, CPX_T_STM32, CPX_F_APP, &txPacketRequestState.route);
+      txPacketRequestState.data[0] = stateRequestCounter;
+      txPacketRequestState.dataLength = 1;
+      cpxSendPacketBlocking(&txPacketRequestState);
+
+      // Capture image
       start = xTaskGetTickCount();
       pi_camera_capture_async(&camera, imgBuff, resolution, pi_task_callback(&task1, capture_done_cb, NULL));
       pi_camera_control(&camera, PI_CAMERA_CMD_START, 0);
       xEventGroupWaitBits(evGroup, CAPTURE_DONE_BIT, pdTRUE, pdFALSE, (TickType_t)portMAX_DELAY);
       pi_camera_control(&camera, PI_CAMERA_CMD_STOP, 0);
       captureTime = xTaskGetTickCount() - start;
+
+      // Receive the state requested from stm
+      cpxReceivePacketBlocking(CPX_F_APP, &rxPacketState);
+      if (*(uint8_t*)(rxPacketState.data) != stateRequestCounter)
+      {
+        cpxPrintToConsole(LOG_TO_CRTP, "Received wrong state request id (%u != %u)\n", *(uint8_t*)(rxPacketState.data), stateRequestCounter);
+      }
+      stateRequestCounter++;
 
       if (streamerMode == JPEG_ENCODING)
       {
@@ -320,7 +424,7 @@ void camera_task(void *parameters)
         imgSize = headerSize + jpegSize + footerSize;
 
         // First send information about the image
-        createImageHeaderPacket(&txp, imgSize, JPEG_ENCODING);
+        createImageHeaderPacket(&txp, imgSize, JPEG_ENCODING, &rxPacketState);
         cpxSendPacketBlocking(&txp);
 
         start = xTaskGetTickCount();
@@ -346,7 +450,7 @@ void camera_task(void *parameters)
         start = xTaskGetTickCount();
 
         // First send information about the image
-        createImageHeaderPacket(&txp, imgSize, RAW_ENCODING);
+        createImageHeaderPacket(&txp, imgSize, RAW_ENCODING, &rxPacketState);
         cpxSendPacketBlocking(&txp);
 
         start = xTaskGetTickCount();
@@ -438,6 +542,7 @@ void start_example(void)
     pmsis_exit(-1);
   }
 
+  /* Only use this for testing the state transfer. We actually will do this inside the camera task.
   xTask = xTaskCreate(state_listener_task, "state_listener_task", configMINIMAL_STACK_SIZE * 2,
                       NULL, tskIDLE_PRIORITY + 1, NULL);
 
@@ -454,6 +559,7 @@ void start_example(void)
     cpxPrintToConsole(LOG_TO_CRTP, "State requester task did not start !\n");
     pmsis_exit(-1);
   }
+  */
 
   while (1)
   {
